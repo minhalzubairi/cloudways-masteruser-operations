@@ -1,0 +1,78 @@
+#!/bin/bash
+
+# Set the base directory
+base_dir="applications"
+
+# Loop through each subdirectory in applications/*/public_html/
+for public_html_dir in ${base_dir}/*/public_html/; do
+    if [[ -d "${public_html_dir}" ]]; then
+        # Extract the application folder name
+        app_folder=$(basename $(dirname ${public_html_dir}))
+
+        echo "Processing directory: ${public_html_dir}"
+
+        # Navigate to the public_html directory
+        cd "${public_html_dir}"
+
+        # Check if it is a WordPress site
+        if wp core is-installed &> /dev/null; then
+            echo "WordPress site detected in ${public_html_dir}"
+
+            # Export the WordPress database with skip-plugins and skip-themes flags
+            wp db export db_export.sql --skip-plugins --skip-themes
+            if [[ $? -ne 0 ]]; then
+                echo "Failed to export WordPress database for ${public_html_dir}"
+                cd - > /dev/null
+                continue
+            fi
+
+            # Get the WordPress home URL and use it to name the zip file
+            home_url=$(wp option get home)
+            if [[ $? -ne 0 ]]; then
+                echo "Failed to get home URL for ${public_html_dir}"
+                cd - > /dev/null
+                continue
+            fi
+
+        else
+            echo "Non-WordPress site detected in ${public_html_dir}"
+
+            # Prompt for MySQL password for the non-WordPress application
+            echo -n "Enter MySQL password for ${app_folder}: "
+            read -s mysql_password
+            echo
+
+            # Export the database using mysqldump
+            db_name=${app_folder}
+            db_user=${app_folder}
+            mysqldump -u${db_user} -p${mysql_password} ${db_name} > db_export.sql
+            if [[ $? -ne 0 ]]; then
+                echo "Failed to export database for ${public_html_dir}"
+                cd - > /dev/null
+                continue
+            fi
+
+            # Use the app_folder name to name the zip file
+            home_url=${app_folder}
+        fi
+
+        # Extract part of the URL after https://
+        url_path=$(echo ${home_url} | sed -E 's|https://||')
+        sanitized_url_path=$(echo ${url_path} | sed 's/[^a-zA-Z0-9]/_/g')
+        zip_file="${sanitized_url_path}.zip"
+
+        # Create the zip file inside the public_html directory
+        zip -r "${zip_file}" .
+        if [[ $? -ne 0 ]]; then
+            echo "Failed to create zip file for ${public_html_dir}"
+            cd - > /dev/null
+            continue
+        fi
+
+        # Clean up the database export file
+        rm db_export.sql
+        if [[ $? -ne 0 ]]; then
+            echo "Failed to remove db_export.sql for ${public_html_dir}"
+        fi
+    fi
+done
